@@ -1,0 +1,60 @@
+services:
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - 80:80
+    volumes:
+      - "./nginx/nginx.conf:/etc/nginx/nginx.conf"
+    depends_on:
+      - fastapi
+    restart: always
+
+  fastapi:
+    container_name: fastapi
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - ./server/.env
+      - ./.env # 모든 컨테이너가 공통으로 공유하는 내용에 대해서 정의되어 있음
+    # 현재 개발 단계이니 아래 내용을 사용함
+    # server/Dockerfile에 COPY와 COMMAND가 존재하지만 docker compsoe up을 통해 run time으로 전환되는 경우
+    # Dockerfile의 내용은 무시되고 볼륨 연결과 아래 커맨드가 실행됨
+    # 이는 개발 단계에서 fastapi소스가 변경되더라도 이미지를 새로 빌드팔 필요 없이 자동으로 컨테이너에 반영되도록 하기 위함임
+    # 새로운 패키지를 설치하는 경우(즉 requirements.txt를 수정하는 경우)는 이미지 재빌드가 필요
+    volumes:
+      - ./server/main:/app
+    # db 컨테이너 뿐만 아니라 db 컨테이너 내부의 postgres 소프트웨어 또한 준비가 완료되었는지 기다리는 로직을 다음과 같이 추가
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # gunicorn은 reloaed기능이 제한적이므로 개발 및 테스트 중에는 uvicorn만을 이용해 서버를 실행
+    command: uvicorn app:app --host 0.0.0.0 --port ${FASTAPI_PORT} --reload
+    restart: always
+
+
+  postgres:
+    image: postgres:18
+    container_name: "postgres"
+    env_file:
+      - ".env"
+    volumes:
+      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf
+      - postgres_db:/var/lib/postgresql # 여기서 volume을 db폴더에 있는 디렉토리를 연결하지 않고 docker에 의해 관리되는 volume을 설정
+    ports:
+      - 5001:5000 # DBeaver를 이용해 gui로 데이터베이스를 제어하기 위해 포트를 컴포트 네트워크 밖으로 염, 개발시에만 사용
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -p ${DB_PORT} -U ${POSTGRES_USER} -d ${POSTGRES_DB}"] # POSTGRES_USER와 POSETGRES_DB는 ./common/.env에 정의되어 있음
+      interval: 5s # 다음 시간 마다 검사
+      timeout: 5s # 응답 대기 시간 설정
+      retries: 5 # 5번 실패하면 종료
+      start_period: 10s # 최초 실행 이후 첫 검사까지의 간격
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf # 커스텀 설정한 config파일로 실행
+    restart: always 
+
+
+# docker에 의해 관리되는 볼륨을 설정
+# 이렇게 하는 이유는 성능, 권한, 볼륨 등의 관리를 위해 docker가 편리한 기능들을 제공하기 떄문
+volumes:
+  postgres_db:
